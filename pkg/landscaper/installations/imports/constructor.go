@@ -51,8 +51,12 @@ func (c *Constructor) Construct(ctx context.Context, inst *installations.Install
 	if err != nil {
 		return err
 	}
+	importedComponentDescriptors, err := c.GetImportedComponentDescriptors(ctx) // returns a map mapping logical names to component descriptors
+	if err != nil {
+		return err
+	}
 
-	templatedDataMappings, err := c.templateDataMappings(fldPath, importedDataObjects, importedTargets, importedTargetLists) // returns a map mapping logical names to data content
+	templatedDataMappings, err := c.templateDataMappings(fldPath, importedDataObjects, importedTargets, importedTargetLists, importedComponentDescriptors) // returns a map mapping logical names to data content
 	if err != nil {
 		return err
 	}
@@ -164,7 +168,7 @@ func (c *Constructor) constructImports(importList lsv1alpha1.ImportDefinitionLis
 	return imports, nil
 }
 
-func (c *Constructor) templateDataMappings(fldPath *field.Path, importedDataObjects map[string]*dataobjects.DataObject, importedTargets map[string]*dataobjects.Target, importedTargetLists map[string]*dataobjects.TargetList) (map[string]interface{}, error) {
+func (c *Constructor) templateDataMappings(fldPath *field.Path, importedDataObjects map[string]*dataobjects.DataObject, importedTargets map[string]*dataobjects.Target, importedTargetLists map[string]*dataobjects.TargetList, importedComponentDescriptors map[string]*dataobjects.ComponentDescriptor) (map[string]interface{}, error) {
 	templateValues := map[string]interface{}{}
 	for name, do := range importedDataObjects {
 		templateValues[name] = do.Data
@@ -181,6 +185,13 @@ func (c *Constructor) templateDataMappings(fldPath *field.Path, importedDataObje
 		templateValues[name], err = targetlist.GetData()
 		if err != nil {
 			return nil, fmt.Errorf("unable to get targetlist data for import %s", name)
+		}
+	}
+	for name, cd := range importedComponentDescriptors {
+		var err error
+		templateValues[name], err = cd.GetData()
+		if err != nil {
+			return nil, fmt.Errorf("unable to get target data for import %s", name)
 		}
 	}
 	spiff, err := spiffing.New().WithFunctions(spiffing.NewFunctions()).WithValues(templateValues)

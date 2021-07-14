@@ -79,8 +79,8 @@ func (o *Operation) Ensure(ctx context.Context) error {
 		return o.NewError(err, "GetInstallationTemplates", err.Error())
 	}
 
-	// remove imports based on optional and conditional imports which are not satisfied in the parent
 	for _, instT := range installationTmpl {
+		// remove imports based on optional and conditional imports which are not satisfied in the parent
 		imports := []lsv1alpha1.DataImport{}
 		for _, imp := range instT.Imports.Data {
 			_, ok := o.Inst.Imports[imp.DataRef]
@@ -89,6 +89,24 @@ func (o *Operation) Ensure(ctx context.Context) error {
 			}
 		}
 		instT.Imports.Data = imports
+
+		// replace data references component descriptor imports with the corresponding parent import
+		// this will eventually lead to a 'direct' reference
+		for i := range instT.Imports.ComponentDescriptors {
+			imp := &instT.Imports.ComponentDescriptors[i]
+			if len(imp.DataRef) != 0 {
+				cdimp, err := o.Inst.GetCDImport(imp.DataRef)
+				if err != nil {
+					return fmt.Errorf("unable to resolve data reference for component descriptor import '%s' in subinstallation: import '%s' not found in parent: %w", imp.Name, imp.DataRef, err)
+				}
+				// set import to that of the parent
+				imp.DataRef = cdimp.DataRef
+				imp.CDRef = cdimp.CDRef
+				imp.ConfigMapRef = cdimp.ConfigMapRef
+				imp.SecretRef = cdimp.SecretRef
+				imp.CDList = cdimp.CDList
+			}
+		}
 	}
 
 	// validate all installation templates before do any follow up actions

@@ -316,6 +316,71 @@ func (o *Operation) GetImportedTargetLists(ctx context.Context) (map[string]*dat
 	return targets, nil
 }
 
+// GetImportedComponentDescriptors returns all imported component descriptors of the installation.
+func (o *Operation) GetImportedComponentDescriptors(ctx context.Context) (map[string]*dataobjects.ComponentDescriptor, error) {
+	cds := map[string]*dataobjects.ComponentDescriptor{}
+	var cd *dataobjects.ComponentDescriptor
+	var err error
+	for _, def := range o.Inst.Info.Spec.Imports.ComponentDescriptors {
+		if def.CDList != nil {
+			// It's a component descriptor list, skip it
+			continue
+		}
+		var (
+			dref, sref, cmref string
+			cdref             *lsv1alpha1.ComponentDescriptorReference = nil
+		)
+		if len(def.DataRef) != 0 {
+			cd, err = GetComponentDescriptorImport(ctx, o.Client(), o.Context().Name, o, def, dataobjects.DataReference)
+			dref = def.DataRef
+		} else if def.CDRef != nil {
+			cd, err = GetComponentDescriptorImport(ctx, o.Client(), o.Context().Name, o, def, dataobjects.RegistryReference)
+			cdref = def.CDRef
+		} else if def.SecretRef != nil {
+			cd, err = GetComponentDescriptorImport(ctx, o.Client(), o.Context().Name, o, def, dataobjects.SecretReference)
+			sref = fmt.Sprintf("%s#%s", def.SecretRef.NamespacedName().String(), def.SecretRef.Key)
+		} else if def.ConfigMapRef != nil {
+			cd, err = GetComponentDescriptorImport(ctx, o.Client(), o.Context().Name, o, def, dataobjects.ConfigMapReference)
+			cmref = fmt.Sprintf("%s#%s", def.ConfigMapRef.NamespacedName().String(), def.ConfigMapRef.Key)
+		} else {
+			return nil, fmt.Errorf("invalid component descriptor import '%s': no config field set", def.Name)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cds[def.Name] = cd
+
+		var (
+			sourceRef *lsv1alpha1.ObjectReference
+			configGen = cd.Descriptor.Version
+			owner     = cd.Owner
+		)
+		if owner != nil && owner.Kind == "Installation" {
+			sourceRef = &lsv1alpha1.ObjectReference{
+				Name:      owner.Name,
+				Namespace: o.Inst.Info.Namespace,
+			}
+			inst := &lsv1alpha1.Installation{}
+			if err := o.Client().Get(ctx, sourceRef.NamespacedName(), inst); err != nil {
+				return nil, fmt.Errorf("unable to get source installation '%s' for import '%s': %w",
+					sourceRef.NamespacedName().String(), def.Name, err)
+			}
+		}
+		o.Inst.ImportStatus().Update(lsv1alpha1.ImportStatus{
+			Name:                   def.Name,
+			Type:                   lsv1alpha1.CDImportStatusType,
+			DataRef:                dref,
+			SecretRef:              sref,
+			ConfigMapRef:           cmref,
+			ComponentDescriptorRef: cdref,
+			SourceRef:              sourceRef,
+			ConfigGeneration:       configGen,
+		})
+	}
+
+	return cds, nil
+}
+
 // NewError creates a new error with the current operation
 func (o *Operation) NewError(err error, reason, message string, codes ...lsv1alpha1.ErrorCode) error {
 	return lserrors.NewWrappedError(err,

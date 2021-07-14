@@ -6,6 +6,7 @@ package installations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	cdv2 "github.com/gardener/component-spec/bindings-go/apis/v2"
@@ -119,32 +120,24 @@ func GetDataImport(ctx context.Context, kubeClient client.Client, contextName st
 		}
 	}
 	if dataImport.SecretRef != nil {
-		secret := &corev1.Secret{}
-		if err := kubeClient.Get(ctx, dataImport.SecretRef.NamespacedName(), secret); err != nil {
+		_, data, gen, err := ResolveSecretReference(ctx, kubeClient, dataImport.SecretRef)
+		if err != nil {
 			return nil, nil, err
-		}
-		data, ok := secret.Data[dataImport.SecretRef.Key]
-		if !ok {
-			return nil, nil, fmt.Errorf("key %s in %s does not exist", dataImport.SecretRef.Key, dataImport.SecretRef.NamespacedName().String())
 		}
 		rawDataObject = &lsv1alpha1.DataObject{}
 		rawDataObject.Data.RawMessage = data
 		// set the generation as it is used to detect outdated imports.
-		rawDataObject.SetGeneration(secret.Generation)
+		rawDataObject.SetGeneration(gen)
 	}
 	if dataImport.ConfigMapRef != nil {
-		cm := &corev1.ConfigMap{}
-		if err := kubeClient.Get(ctx, dataImport.ConfigMapRef.NamespacedName(), cm); err != nil {
+		_, data, gen, err := ResolveConfigMapReference(ctx, kubeClient, dataImport.ConfigMapRef)
+		if err != nil {
 			return nil, nil, err
-		}
-		data, ok := cm.Data[dataImport.ConfigMapRef.Key]
-		if !ok {
-			return nil, nil, fmt.Errorf("key %s in %s does not exist", dataImport.ConfigMapRef.Key, dataImport.ConfigMapRef.NamespacedName().String())
 		}
 		rawDataObject = &lsv1alpha1.DataObject{}
 		rawDataObject.Data.RawMessage = []byte(data)
 		// set the generation as it is used to detect outdated imports.
-		rawDataObject.SetGeneration(cm.Generation)
+		rawDataObject.SetGeneration(gen)
 	}
 
 	do, err := dataobjects.NewFromDataObject(rawDataObject)
@@ -226,6 +219,72 @@ func GetTargetListImportBySelector(ctx context.Context, kubeClient client.Client
 	return targetList, nil
 }
 
+// GetComponentDescriptorImport fetches the component descriptor import from the cluster/registry.
+func GetComponentDescriptorImport(ctx context.Context, kubeClient client.Client, contextName string, op *Operation, imp lsv1alpha1.ComponentDescriptorImport, refType dataobjects.CDReferenceType) (*dataobjects.ComponentDescriptor, error) {
+	// default refType if empty
+	if len(refType) == 0 {
+		if imp.ConfigMapRef != nil {
+			refType = dataobjects.ConfigMapReference
+		} else if imp.SecretRef != nil {
+			refType = dataobjects.SecretReference
+		} else if imp.CDRef != nil {
+			refType = dataobjects.RegistryReference
+		} else if len(imp.DataRef) != 0 {
+			refType = dataobjects.DataReference
+		} else {
+			return nil, fmt.Errorf("invalid component descriptor import '%s': none of dataRef, configMapRef, secretRef, and componentDescriptorRef is specified", imp.Name)
+		}
+	}
+
+	res := dataobjects.NewComponentDescriptor()
+	owner := kubernetes.GetOwner(op.Inst.Info.ObjectMeta)
+	if owner != nil && owner.Kind == "Installation" {
+		res.SetOwner(owner)
+	}
+	switch refType {
+	case dataobjects.DataReference:
+		// resolving data references is hard at this point, therefore they are replaced during the subinstallation template rendering
+		// this means that there shouldn't be any data reference at this point
+		return nil, fmt.Errorf("unsupported reference type '%s'", string(refType))
+	case dataobjects.RegistryReference:
+		// fetch component descriptor from registry
+		if imp.CDRef == nil {
+			return nil, fmt.Errorf("reference type mismatch: reference type is '%s', but CDRef is nil", string(refType))
+		}
+		cd, err := op.ComponentsRegistry().Resolve(ctx, imp.CDRef.RepositoryContext, imp.CDRef.ComponentName, imp.CDRef.Version)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get component descriptor from registry (%v): %w", imp.CDRef, err)
+		}
+		res.SetRegistryReference(imp.CDRef).SetDescriptor(cd)
+	case dataobjects.ConfigMapReference:
+		_, data, _, err := ResolveConfigMapReference(ctx, kubeClient, imp.ConfigMapRef)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get component descriptor from configmap %s: %w", imp.ConfigMapRef.NamespacedName().String(), err)
+		}
+		cd := &cdv2.ComponentDescriptor{}
+		err = json.Unmarshal([]byte(data), cd)
+		if err != nil {
+			return nil, fmt.Errorf("unable to convert data into component descriptor: %w", err)
+		}
+		res.SetConfigMapReference(imp.ConfigMapRef).SetDescriptor(cd)
+	case dataobjects.SecretReference:
+		_, data, _, err := ResolveSecretReference(ctx, kubeClient, imp.SecretRef)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get component descriptor from secret %s: %w", imp.SecretRef.NamespacedName().String(), err)
+		}
+		cd := &cdv2.ComponentDescriptor{}
+		err = json.Unmarshal(data, cd)
+		if err != nil {
+			return nil, fmt.Errorf("unable to convert data into component descriptor: %w", err)
+		}
+		res.SetSecretReference(imp.SecretRef).SetDescriptor(cd)
+	default:
+		return nil, fmt.Errorf("unknown reference type '%s' for component descriptor import", string(refType))
+	}
+
+	return res, nil
+}
+
 // GeReferenceFromComponentDescriptorDefinition tries to extract a component descriptor reference from a given component descriptor definition
 // GetReferenceFromComponentDescriptorDefinition tries to extract a component descriptor reference from a given component descriptor definition
 func GetReferenceFromComponentDescriptorDefinition(cdDef *lsv1alpha1.ComponentDescriptorDefinition) *lsv1alpha1.ComponentDescriptorReference {
@@ -243,4 +302,42 @@ func GetReferenceFromComponentDescriptorDefinition(cdDef *lsv1alpha1.ComponentDe
 	}
 
 	return cdDef.Reference
+}
+
+// ResolveSecretReference is an auxiliary function that fetches the content of a secret as specified by the given SecretReference
+// The first returned value is the complete secret content, the second one the specified key (if set), the third one is the generation of the secret
+func ResolveSecretReference(ctx context.Context, kubeClient client.Client, secretRef *lsv1alpha1.SecretReference) (map[string][]byte, []byte, int64, error) {
+	secret := &corev1.Secret{}
+	if err := kubeClient.Get(ctx, secretRef.NamespacedName(), secret); err != nil {
+		return nil, nil, 0, err
+	}
+	completeData := secret.Data
+	var data []byte
+	var ok bool
+	if len(secretRef.Key) != 0 {
+		data, ok = secret.Data[secretRef.Key]
+		if !ok {
+			return nil, nil, 0, fmt.Errorf("key %s in secret %s does not exist", secretRef.Key, secretRef.NamespacedName().String())
+		}
+	}
+	return completeData, data, secret.Generation, nil
+}
+
+// ResolveConfigMapReference is an auxiliary function that fetches the content of a configmap as specified by the given ConfigMapReference
+// The first returned value is the complete configmap content, the second one the specified key (if set), the third one is the generation of the configmap
+func ResolveConfigMapReference(ctx context.Context, kubeClient client.Client, configMapRef *lsv1alpha1.ConfigMapReference) (map[string]string, string, int64, error) {
+	cm := &corev1.ConfigMap{}
+	if err := kubeClient.Get(ctx, configMapRef.NamespacedName(), cm); err != nil {
+		return nil, "", 0, err
+	}
+	completeData := cm.Data
+	var data string
+	var ok bool
+	if len(configMapRef.Key) != 0 {
+		data, ok = cm.Data[configMapRef.Key]
+		if !ok {
+			return nil, "", 0, fmt.Errorf("key %s in configmap %s does not exist", configMapRef.Key, configMapRef.NamespacedName().String())
+		}
+	}
+	return completeData, data, cm.Generation, nil
 }
