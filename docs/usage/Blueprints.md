@@ -2,11 +2,11 @@
 
 A Blueprint is a parameterized description of how to deploy a specific component.
 
-The description follows the kubernetes operator approach:
+The description follows the kubernetes controller approach:
 
 The task of a Blueprint is to provide deployitem descriptions based on its input and outputs based on the input and the state of the deployment.
 
-The rendered deployitems are then handled by independent kubernetes operators, which perform the real deployment tasks. This way, the Blueprint does not execute deployment actions, but provides the target state of formally described deployitems. The actions described by the Blueprint itself are therefore restricted to YAML-based manifest rendering. These actions are described by [template executions](./Templating.md).
+The rendered deployitems are then handled by independent kubernetes controllers, which perform the real deployment tasks. This way, the Blueprint does not execute deployment actions, but provides the target state of formally described deployitems. The actions described by the Blueprint itself are therefore restricted to YAML-based manifest rendering. These actions are described by [template executions](./Templating.md).
 
 A Blueprint is a filesystem structure that contains the blueprint definition at `/blueprint.yaml`. Any other additional file can be referred to in the blueprint.yaml for JSON schema definitions and templates.
 
@@ -165,32 +165,68 @@ subinstallations:
 
 Blueprints describe formal imports. A formal import parameter has a name and a *value type*. It may describe a single simple value or a complex data structure. There are several *types* of imports, indicating different use cases:
 - **`data`**
+
   This type of import is used to import arbitrary data according to its value type. The value type is described by a [JSONSchema](#jsonschema).
+
+
 - **`target`**
+
   This type declares an import of a [deployment target object](./Targets.md). It is used in the rendered deployitems to specify the target environment for the deployment of the deployitem.
+
+
 - **`targetList`**
+
   This type can be used if, instead of a single target object, an arbitrary number of targets should be imported. All targets imported as part of a targetlist import must have the same `targetType`.
+
+
 - **`componentDescriptor`**
+
   This type refers to an import of a component descriptor.
+
+
 - **`componentDescriptorList`**
+
   Analogous to `targetList`, this type allows importing an arbitrary number of component descriptors.
 
 The imports are described as a list of import declarations in the blueprint top-level field `imports`. An import declaration has the following fields:
+
 - **`name`** *string*
+
   Identifier for the import parameter. Can be used in the templating to access the actual import value provided by the installation.
+
+
 - **`type`** *type*
+
   The type of the import as described above.
   For backward compatibility, the `type` field is currently optional for *data* and *target* imports, but it is strongly recommended to specify it for each import declaration.
+
+
 - **`required`** *bool* (default: `true`)
+
   If set to false, the installation does not have to provide this import.
+
+
 - **`default`** *any*
+
   If the import is not required and not provided by the installation, this default value will be used for it.
+
+
 - **`imports`** *list of import declarations*
+
   Nested imports only exist if the owning import is satisfied. Cannot be specified for a required import. See [here](./ConditionalImports.md) for further details.
+
+
 - **`schema`** *JSONSchema*
+
   Must be set for imports of type `data` (only). Describes the structure of the expected import value as [JSONSchema](#jsonschema).
+
+
 - **`targetType`** *string*
-  Must be set for imports of type `target` and `targetList` (only). It declares the type of the expected [*Target*](./Targets.md) object. If the `targetType` does not contain a `/`, it will be prefixed with `landscaper.gardener.cloud/`.
+
+  Must be set for imports of type `target` and `targetList` (only). It declares
+  the type of the expected [*Target*](./Targets.md) object. If the `targetType` 
+  does not contain a `/`, it will be prefixed with `landscaper.gardener.cloud/`.
+
 
 **Example**
 ```yaml
@@ -228,22 +264,44 @@ possibilities to validate the input:
 
 ## Export Definitions
 
-Blueprints describe formal exports. The export declarations are very similar to the import declarations. The following types can be exported:
-- **`data`**
-  This type of export is used to export arbitrary data according to its value type. The value type is described by a [JSONSchema](#jsonschema).
-- **`target`**
-  This type declares an export of a [deployment target object](./Targets.md). It is used in the rendered deployitems to specify the target environment for the deployment of the deployitem.
+Blueprints describe formal exports whose values can be exported by using
+_Installations_ to _DataObjects_ to be consumed by other _Installations_, again.
+The following types can be exported:
 
-The exports are described as a list of export declarations in the blueprint top-level field `exports`. An export declaration has the following fields:
+- **`data`**
+
+  This type of export is used to export arbitrary data according to its value type. The value type is described by a [JSONSchema](#jsonschema).
+
+
+- **`target`**
+
+  This type declares an export of a [deployment target object](./Targets.md). It
+  is used in the rendered deployitems to specify the target environment for the 
+  deployment of the deployitem.
+
+The exports are described as a list of export declarations in the blueprint
+top-level field `exports`. An export declaration has the following fields:
+
 - **`name`** *string*
-  Identifier for the export parameter. Can be used in the templating to access the actual export value provided by the installation.
+
+  Identifier for the export **parameter**. Can be used in the templating to access the actual export value provided by the installation.
+
+
 - **`type`** *type*
+
   The type of the export as described above.
   For backward compatibility, the `type` field is currently optional for *data* and *target* exports, but it is strongly recommended to specify it for each export declaration.
+
+
 - **`schema`** *JSONSchema*
+
   Must be set for exports of type `data` (only). Describes the structure of the expected export value as [JSONSchema](#jsonschema).
+
+
 - **`targetType`** *string*
+
   Must be set for exports of type `target` (only). It declares the type of the expected [*Target*](./Targets.md) object. If the `targetType` does not contain a `/`, it will be prefixed with `landscaper.gardener.cloud/`.
+
 
 **Example**
 ```yaml
@@ -280,14 +338,26 @@ This is described by rule sets consisting of [templates](./Templating) carried t
 with the blueprint.
 
 All template [executions](./Templating.md) get a common standardized binding:
+
 - **`imports`**
+
   the imports of the installation, as a mapping from import name to assigned values
+
+
 - **`cd`**
+
   the component descriptor of the owning component
+
+
 - **`blueprintDef`**
+
   the blueprint definition, as given in the installation (not the blueprint.yaml itself)
+
+
 - **`componentDescriptorDef`**
+
   the component descriptor definition, as given in the installation (not the component descriptor itself)
+
 
 Additionally, there are context specific bindings and those depending on the chosen
 template processor.
@@ -327,7 +397,9 @@ The template processing is fed with the [standard binding](#rendering)
 
 A template execution should return a YAML document with two optional
 top-level nodes:
+
 - **`bindings`** *map*
+
   This node is expected to contain a map with additional bindings which
   will be added to the regular import bindings. This way it is even possible
   to modify or replace original import values for the further processing steps,
@@ -337,7 +409,9 @@ top-level nodes:
   meaning the order of the executions is relevant and previously added
   bindings are available for the processing of the following executions.
 
+
 - **`errors`** *string list*
+
   Alternatively the template processing may provide a list of validation errors.
   Like [schema](#jsonschema) validations, this could be used to validate imports
   before invasive actions are started. But for import executions the template
@@ -413,6 +487,62 @@ A template execution must return a YAML document with at least the top-level
 node `deployItems`. It is expected to contain a list of deployitem specifications.
 Other nodes in the document are ignored.
 These specifications will then be mapped to final _DeployItems_ by the _Landscaper_.
+
+A deployitem specification has the following fields:
+
+- **`name`** *string*
+
+  The name of the item in the context of the blueprint. It is used to generate
+  the name of the final deployitem together with its scope and for referring
+  to exported values in ete [export value](#export-values) rendering.
+
+  The name must be unique in the context of the blueprint over all executions.
+
+
+- **`dependsOn`** *string list*
+
+  This list of item names can be used to enforce an ordering for the creation.
+  The deletion is done in the opposite order.
+
+
+- **`type`** *string*
+
+  The type of the deployitem described. This type finally determines the expected
+  structure for the configuration, and it determines the kind of _Deployer_ 
+  responsible for the item.  This is the contract between the deployers and
+  the deployitem creator.
+
+
+- **`target`** *object reference*
+
+  This reference (`name` and optional `namespace`) denotes the target object
+  describing the target environment the depoyitem should be deployed to,
+  e.g. a dedicated kubernetes cluster.
+
+
+- **`labels`** *string map*
+
+  This map is used to attach labels to the generated deployitem.
+
+
+- **`configuration`** *any*
+
+  The structure of this field depends on the type of the deployitem.
+  It is intended to tell the deployer about the expected target state to achieve
+  Depending on the deployer it is possible to request information about
+  the deployment, for example, the address of a generated load balancer for
+  a Kubernetes service object.
+
+  This structure is the formal contract towards the deployer. It should
+  be versioned according to the Kubernetes mechanism with `apiVersion` and
+  `kind`. But this is not enforced by the _Landscaper_.
+
+  While the requesting of imports is not formalized (please refer to the
+  [documentation of the dedicated deployer](../deployer/README.md)), the
+  deployer can provide exports in formal way in the status of a deployitem.
+  These values are then available in the binding for the
+  [export executions](#export-values).
+
 
 **Example rendered document**:
 ```yaml
@@ -590,14 +720,27 @@ The template processing is fed with the [standard binding](#rendering) and suppo
 Additional bindings are provided to access the exports of generated elements:
 
 - **`deployitems`** *map*
+
   This map contains a map entry for all generated deployitems according to their configured name.
   The entry then contains the configured deployitem exports.
+
+
 - **`dataobjects`** *map*
-  This map contains the values of the nested data objects provided by nested installations.
+
+  This map contains the values of the nested data objects provided by nested
+  installations.
+
+
 - **`targets`** *map*
-  This map contains the values of the nested targets provided by all nested provided by nested installations.
+
+  This map contains the values of the nested targets provided by all nested
+  provided by nested installations.
+
+
 - **`values`** *map* *(deprecated)*
+
   This node is a map with the entries shown above.
+
 
 A template execution must return a YAML document with at least the top-level
 node `exports`. It is expected to contain a map of export parameters mapped to
